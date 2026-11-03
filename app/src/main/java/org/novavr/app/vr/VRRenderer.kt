@@ -10,6 +10,8 @@ import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.SystemClock
 import android.util.Log
+import android.opengl.GLES11Ext
+import org.novavr.app.mirror.MirrorSource
 import org.novavr.app.settings.DisplayMode
 import org.novavr.app.settings.VRSettings
 import org.novavr.app.utils.DeviceInfo
@@ -25,6 +27,10 @@ import javax.microedition.khronos.opengles.GL10
  * Per frame: read the predicted head pose, render the scene for both eyes
  * through [StereoRenderer] and let the Cardboard SDK apply lens distortion.
  *
+ * The virtual screen shows either the captured Android display ([mirrorSource]
+ * set: frames are sampled straight from the SurfaceTexture, zero-copy) or the
+ * generated calibration test pattern.
+ *
  * Settings arrive from the UI thread through [updateSettings] and are applied
  * at the start of the next frame, so the UI never touches GL state directly.
  */
@@ -33,12 +39,18 @@ internal class VRRenderer(
     private val deviceInfo: DeviceInfo,
     initialSettings: VRSettings,
     private val calibrationMode: Boolean,
+    private val mirrorSource: MirrorSource?,
     private val listener: Listener,
 ) : GLSurfaceView.Renderer {
 
     interface Listener {
-        /** Called on the GL thread roughly once per second. */
-        fun onFrameStats(fps: Float)
+        /**
+         * Called on the GL thread roughly once per second.
+         * @param captureFps new captured frames per second (0 without mirroring).
+         * @param hasCapturedFrame whether any captured frame has arrived yet.
+         * @param captureBlank the captured stream has stayed completely black.
+         */
+        fun onFrameStats(fps: Float, captureFps: Float, hasCapturedFrame: Boolean, captureBlank: Boolean)
 
         /** Called on the GL thread if the Cardboard viewer cannot be created. */
         fun onRendererError(message: String)
@@ -56,10 +68,14 @@ internal class VRRenderer(
     private var virtualScreen = VirtualScreen()
     private var environment = Environment()
     private var eyeMarkers = EyeMarkers()
+    private var blankProbe = BlankFrameProbe()
 
     private val pendingSettings = AtomicReference<VRSettings?>(null)
     private var settings = initialSettings
     private var contentMode: DisplayMode? = null
+    private val testPattern = ScreenTexture()
+    private val mirrorTexture = ScreenTexture(target = GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
+    private var mirrorTextureName = 0
     private var glInitialized = false
 
     private var surfaceWidth = 0
@@ -76,12 +92,13 @@ internal class VRRenderer(
 
     private var statsWindowStartNs = 0L
     private var statsFrames = 0
+    private var statsCaptureFramesStart = 0L
 
     private val eyeDrawer = StereoRenderer.EyeDrawer { eye, eyeFromHead, projection ->
         Matrix.multiplyMM(eyeView, 0, eyeFromHead, 0, headView, 0)
         Matrix.multiplyMM(viewProjection, 0, projection, 0, eyeView, 0)
         if (settings.showEnvironment) environment.draw(viewProjection)
-        virtualScreen.draw(viewProjection)
+        virtualScreen.draw(viewProjection, if (mirrorSource != null) mirrorTexture else testPattern)
         if (calibrationMode) {
             // Head-locked: ignores head rotation, keeps per-eye stereo offset.
             Matrix.multiplyMM(eyeProjection, 0, projection, 0, eyeFromHead, 0)
@@ -110,9 +127,14 @@ internal class VRRenderer(
         // A new EGL context means every previous GL object is already gone.
         if (glInitialized) abandonGlObjects()
         try {
-            virtualScreen.init()
+            virtualScreen.init(external = mirrorSource != null)
             environment.init()
             if (calibrationMode) eyeMarkers.init()
+            if (mirrorSource != null) {
+                mirrorTextureName = GlUtil.createExternalTexture()
+                mirrorSource.attach(mirrorTextureName)
+                blankProbe.init()
+            }
             glInitialized = true
             contentMode = null
         } catch (e: RuntimeException) {
@@ -131,7 +153,12 @@ internal class VRRenderer(
 
     override fun onDrawFrame(gl: GL10?) {
         applyPendingSettings()
-        if (contentMode != settings.displayMode) updateScreenContent()
+        if (mirrorSource != null) {
+            latchMirrorFrame(mirrorSource)
+            blankProbe.update(SystemClock.elapsedRealtimeNanos(), mirrorTexture)
+        } else if (contentMode != settings.displayMode) {
+            updateTestPattern()
+        }
 
         headTracker.getHeadView(predictionNanos, headView)
         stereo.render(eyeDrawer)
@@ -141,6 +168,13 @@ internal class VRRenderer(
     /** Releases all GL resources. Must be queued on the GL thread before pausing. */
     fun releaseGl() {
         if (!glInitialized) return
+        mirrorSource?.detach()
+        blankProbe.release()
+        GlUtil.deleteTexture(mirrorTextureName)
+        mirrorTextureName = 0
+        mirrorTexture.id = 0
+        GlUtil.deleteTexture(testPattern.id)
+        testPattern.id = 0
         stereo.release()
         virtualScreen.release()
         environment.release()
@@ -157,11 +191,18 @@ internal class VRRenderer(
      * Cardboard viewer is freed, before anything is created in the new context.
      */
     private fun abandonGlObjects() {
+        // The stream is still bound to the dead context; unbinding may fail,
+        // in which case attaching to the new context will report the error.
+        runCatching { mirrorSource?.detach() }
+        mirrorTextureName = 0
+        mirrorTexture.id = 0
+        testPattern.id = 0
         stereo.abandon()
         stereo = StereoRenderer()
         virtualScreen = VirtualScreen()
         environment = Environment()
         eyeMarkers = EyeMarkers()
+        blankProbe = BlankFrameProbe()
         glInitialized = false
     }
 
@@ -189,7 +230,16 @@ internal class VRRenderer(
         updateGeometry()
     }
 
-    private fun updateScreenContent() {
+    private fun latchMirrorFrame(source: MirrorSource) {
+        if (source.latchLatest(mirrorTexture.texMatrix)) {
+            mirrorTexture.id = mirrorTextureName
+            mirrorTexture.aspect = source.aspect
+        } else {
+            mirrorTexture.id = 0 // black until the first frame arrives
+        }
+    }
+
+    private fun updateTestPattern() {
         val mode = settings.displayMode
         val bitmap = ScreenContent.createTestPattern(
             mode = mode,
@@ -197,7 +247,10 @@ internal class VRRenderer(
             sourceLongPx = deviceInfo.displayLongPx,
             sourceShortPx = deviceInfo.displayShortPx,
         )
-        virtualScreen.setTexture(GlUtil.createTexture(bitmap))
+        GlUtil.deleteTexture(testPattern.id)
+        testPattern.id = GlUtil.createTexture(bitmap)
+        testPattern.aspect = aspectFor(mode)
+        ScreenTexture.setBitmapFlip(testPattern.texMatrix)
         bitmap.recycle()
         contentMode = mode
         updateGeometry()
@@ -220,10 +273,25 @@ internal class VRRenderer(
         statsFrames++
         val elapsed = now - statsWindowStartNs
         if (elapsed >= 1_000_000_000L) {
-            listener.onFrameStats(statsFrames * 1e9f / elapsed)
+            val captured = mirrorSource?.latchedFrames ?: 0L
+            listener.onFrameStats(
+                fps = statsFrames * 1e9f / elapsed,
+                captureFps = (captured - statsCaptureFramesStart) * 1e9f / elapsed,
+                hasCapturedFrame = mirrorSource?.hasFrame == true,
+                captureBlank = mirrorSource != null && blankProbe.isBlank,
+            )
             if (Log.isLoggable(TAG, Log.DEBUG)) {
-                Log.d(TAG, "headView=" + headView.joinToString(limit = 16) { "%.2f".format(it) })
+                Log.d(
+                    TAG,
+                    "fps=%.1f capture=%.1f frame=%s headView=%s".format(
+                        statsFrames * 1e9f / elapsed,
+                        (captured - statsCaptureFramesStart) * 1e9f / elapsed,
+                        mirrorSource?.hasFrame,
+                        headView.joinToString(limit = 16) { "%.2f".format(it) },
+                    ),
+                )
             }
+            statsCaptureFramesStart = captured
             statsFrames = 0
             statsWindowStartNs = now
         }

@@ -113,6 +113,33 @@ fun SettingsScreen(
                 )
             }
 
+            SectionCard("Screen mirroring") {
+                LabeledSlider(
+                    label = "Capture resolution",
+                    valueLabel = when {
+                        settings.mirrorResolutionScale >= 0.99f -> "Full"
+                        settings.mirrorResolutionScale >= 0.74f -> "High (75%)"
+                        else -> "Balanced (50%)"
+                    },
+                    value = settings.mirrorResolutionScale,
+                    range = VRSettings.MIRROR_SCALE_RANGE,
+                    steps = 1,
+                    onValueChange = { v -> onUpdate { it.copy(mirrorResolutionScale = (v * 4).roundToInt() / 4f) } },
+                )
+                Text(
+                    "The headset shows the virtual screen with far fewer pixels than the phone panel, " +
+                        "so lower capture resolutions look almost identical and save battery.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NovaColors.TextSecondary,
+                )
+                SwitchRow(
+                    title = "Follow content orientation",
+                    subtitle = "Switch Portrait / Landscape when the shared app rotates",
+                    checked = settings.followContentOrientation,
+                    onCheckedChange = { v -> onUpdate { it.copy(followContentOrientation = v) } },
+                )
+            }
+
             SectionCard("Headset") {
                 val custom = settings.lensSeparationMm != null
                 val profileValue = profileLensSeparationMm ?: VRSettings.DEFAULT_LENS_SEPARATION_MM

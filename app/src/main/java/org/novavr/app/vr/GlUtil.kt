@@ -100,6 +100,23 @@ internal object GlUtil {
         if (id != 0) GLES30.glDeleteProgram(id)
     }
 
+    fun hasExtension(name: String): Boolean =
+        GLES30.glGetString(GLES30.GL_EXTENSIONS)?.split(' ')?.contains(name) == true
+
+    /** Creates an external OES texture name for a SurfaceTexture. */
+    fun createExternalTexture(): Int {
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        val target = android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+        GLES30.glBindTexture(target, ids[0])
+        GLES30.glTexParameteri(target, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(target, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(target, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(target, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(target, 0)
+        return ids[0]
+    }
+
     fun checkError(where: String) {
         var error = GLES30.glGetError()
         while (error != GLES30.GL_NO_ERROR) {

@@ -32,6 +32,12 @@ class VRSettingsTest {
     }
 
     @Test
+    fun mirrorScaleIsClamped() {
+        assertEquals(0.5f, VRSettings(mirrorResolutionScale = 0.1f).sanitized().mirrorResolutionScale, 0f)
+        assertEquals(1f, VRSettings(mirrorResolutionScale = 3f).sanitized().mirrorResolutionScale, 0f)
+    }
+
+    @Test
     fun displayModeToggles() {
         assertEquals(DisplayMode.LANDSCAPE, DisplayMode.PORTRAIT.toggled())
         assertEquals(DisplayMode.PORTRAIT, DisplayMode.LANDSCAPE.toggled())

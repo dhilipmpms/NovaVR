@@ -7,15 +7,45 @@ VR display for inexpensive Cardboard-style headsets. The long-term goal is a
 complete VR workstation: Android screen mirroring, virtual desktops, floating
 app windows and Bluetooth keyboard and mouse support.
 
-Version **0.1.0** builds the foundation: a stable, low-latency stereoscopic
-renderer with head tracking and a virtual screen.
+Version **0.2.0** adds **Android screen mirroring**: a real app's live
+content on the virtual screen, rendered in stereo straight from the GPU. It
+builds on 0.1's low-latency stereoscopic renderer, head tracking and
+calibration tools.
 
 The app works offline, requires no account and does not need Google Play
 Services.
 
 ---
 
-## Features in 0.1.0
+## New in 0.2.0: screen mirroring
+
+* **Live Android content in VR** through MediaProjection → VirtualDisplay →
+  SurfaceTexture → OpenGL ES external texture. No CPU copies; the newest
+  frame is latched every display refresh.
+* **Single-app sharing.** In the system dialog choose **"A single app"** and
+  pick the app. NovaVR draws VR in an overlay above that app, so the app keeps
+  running while you watch it in the headset.
+* **No feedback loop.** NovaVR is never part of its own capture. If "Entire
+  screen" is chosen, the secure overlay is blacked out instead of recursing,
+  and VR explains what to do.
+* **Portrait / Landscape** apply to captured content, which is fitted without
+  stretching. With **Follow content orientation**, the mode switches
+  automatically when the shared app rotates, and the VirtualDisplay is resized
+  to match.
+* **VR controls:** stop mirroring, hide/show VR, switch mode, recenter, and
+  adjust screen size and distance (tuning panel), without leaving the headset.
+* **Foreground service + notification** with Show/Hide VR and Stop. Cleanup is
+  complete when sharing stops: the status-bar chip, screen lock and the Stop
+  button all lead to it.
+* **Settings:** capture resolution (50/75/100%) and follow content
+  orientation.
+* The calibration test pattern stays available as **Test pattern VR**.
+
+Requires Android 14 or newer. See **[docs/screen-mirroring.md](docs/screen-mirroring.md)**
+for the design, Android's restrictions, and why NovaVR can't (yet) show
+arbitrary apps as independent VR windows.
+
+## Features from 0.1.0
 
 * **Stereoscopic VR rendering** (OpenGL ES 3.0)
   * Separate left-eye and right-eye views, each with its own eye offset and
@@ -48,7 +78,7 @@ Services.
   * Lens-separation adjustment on top of the headset profile.
   * Gyroscope responsiveness test: sample rate, per-axis response, noise at
     rest, gravity magnitude and a rotation-following dot.
-* **Home screen** with branding, Start VR, the display-mode picker, quick
+* **Home screen** with branding, Start screen mirroring, Test pattern VR, the display-mode picker, quick
   settings, links to Calibration and Settings, and device information: model,
   Android version, display, refresh rates, OpenGL ES version and sensors.
 * **Settings**: render resolution, a high-refresh-rate preference, the
@@ -60,8 +90,11 @@ Services.
 |---|---|
 | Tap screen / press headset button | Switch Portrait ⇄ Landscape |
 | Long press | Recenter the view |
-| ✕ button or Back | Exit VR |
-| ⇄ / ◎ buttons (top centre) | Switch mode / recenter |
+| ✕ button or Back | Exit VR (test pattern) / hide VR, keep mirroring (mirroring) |
+| ■ button | Stop screen mirroring |
+| ⧉ button | Start screen mirroring (from test-pattern VR) |
+| ⇄ / ◎ buttons | Switch mode / recenter |
+| ☰ (tune) button | Screen size − / + and distance − / + |
 
 ---
 
@@ -80,9 +113,16 @@ Services.
 
 The runtime dependencies are AndroidX Core, Activity, Lifecycle, Compose and
 protobuf-javalite (used by the Cardboard SDK). There are no analytics, network
-or Play Services libraries, and no dangerous permissions. The only permission
-is `HIGH_SAMPLING_RATE_SENSORS`, a normal permission granted at install, which
-allows fast gyroscope sampling.
+or Play Services libraries. Permissions:
+* `HIGH_SAMPLING_RATE_SENSORS`: fast gyroscope sampling.
+* `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PROJECTION`: the capture
+  service.
+* "Display over other apps", granted by the user: the VR view over the shared
+  app.
+* Optional `POST_NOTIFICATIONS`: mirroring controls in the notification.
+
+The [mirroring document](docs/screen-mirroring.md#permissions) explains each
+one.
 
 ---
 
@@ -101,12 +141,20 @@ NovaVR/
 │       │   ├── VROverlay.kt               In-VR overlay, gestures
 │       │   ├── Components.kt              Shared composables
 │       │   └── theme/Theme.kt
+│       ├── mirror/
+│       │   ├── ScreenMirrorService.kt     Foreground service: MediaProjection + VirtualDisplay
+│       │   ├── MirrorSource.kt            Detached SurfaceTexture: zero-copy frames for GL
+│       │   ├── VROverlayWindow.kt         Secure VR overlay above the shared app
+│       │   ├── MirrorLauncher.kt          Permission + consent flow (Compose)
+│       │   └── MirrorStatus.kt            Process-wide mirroring state
 │       ├── vr/
-│       │   ├── VRActivity.kt              VR session lifecycle, window/refresh setup
+│       │   ├── VRSession.kt               VR engine shared by activity and overlay
+│       │   ├── VRActivity.kt              Test-pattern / calibration VR host
 │       │   ├── VRRenderer.kt              GLSurfaceView.Renderer, per-frame logic
+│       │   ├── BlankFrameProbe.kt         Detects an all-black capture (async PBO)
 │       │   ├── StereoRenderer.kt          Eye buffer + Cardboard distortion pass
 │       │   ├── HeadTracker.kt             Cardboard head tracker wrapper
-│       │   ├── VirtualScreen.kt           Textured virtual screen
+│       │   ├── VirtualScreen.kt           Virtual screen: 2D or OES texture, aspect fit
 │       │   ├── ScreenContent.kt           Test-pattern / eye-marker textures
 │       │   ├── Environment.kt             Floor grid
 │       │   ├── EyeMarkers.kt              Calibration per-eye markers
@@ -122,6 +170,7 @@ NovaVR/
 │       ├── java/                          SDK Java helpers used by native code
 │       ├── kotlin/org/novavr/cardboard/   CardboardNative, DeviceParams
 │       └── proto/                         cardboard_device.proto
+├── docs/screen-mirroring.md               Mirroring design + Android restrictions
 ├── gradle/libs.versions.toml
 ├── build.gradle.kts · settings.gradle.kts · gradle.properties
 ├── LICENSE (GPL-3.0)
@@ -180,8 +229,12 @@ configuration.
    ```bash
    adb install -r app/build/outputs/apk/debug/app-debug.apk
    ```
-3. Launch **NovaVR**, run **Calibration** once, tap **Start VR** and place the
-   phone in the headset with the white divider centred.
+3. Launch **NovaVR** and run **Calibration** once.
+4. Tap **Start screen mirroring**. Allow **Display over other apps** the first
+   time, choose **A single app** in the system dialog, and pick the app.
+5. Place the phone in the headset with the white divider centred. To stop,
+   tap ■ in VR, tap **Stop mirroring** in the notification, or tap **Stop
+   sharing** in the status bar.
 
 ---
 
@@ -203,8 +256,16 @@ configuration.
 
 ## Current limitations
 
-* The virtual screen shows a built-in calibration test pattern. Screen
-  mirroring comes in a later phase.
+* Mirroring shows one shared app at a time, as a mirror. Apps can't yet be
+  separate VR windows; that needs privileged display APIs (see the
+  [mirroring document](docs/screen-mirroring.md#what-isnt-possible-yet-and-the-path-forward)).
+* There's no input to the shared app from inside VR yet: hide VR, interact,
+  then show VR again. Protected content (DRM video, secure apps) is black in
+  any capture.
+* Screen mirroring needs Android 14+; Android 10–13 get test-pattern VR only.
+* While mirroring, the refresh rate follows the shared app's own request. On
+  the Edge 60 Fusion most apps are capped at 60 Hz by the OEM policy, so VR
+  runs at 60 fps there; test-pattern VR runs at about 118 fps.
 * There's no QR-code headset pairing, because it would need camera and Play
   Services. The Cardboard V1 profile is used, with adjustable lens separation.
 * Orientation tracking only (3DoF, with the SDK's neck model). There's no
@@ -215,11 +276,10 @@ configuration.
 
 ## Roadmap
 
-1. **0.2:** Android screen mirroring onto the virtual screen
-   (MediaProjection → SurfaceTexture), and headset profile import from a
-   viewer URL.
-2. **0.3:** Bluetooth keyboard and mouse input with a virtual pointer, and a
-   curved screen option.
+1. ~~**0.2:** Android screen mirroring onto the virtual screen~~ (done).
+2. **0.3:** Bluetooth keyboard and mouse input with a virtual pointer routed
+   to the shared app, a curved screen option, and headset profile import from
+   a viewer URL.
 3. **0.4:** Floating application windows and multiple virtual screens.
 4. **0.5:** Virtual desktop environment and launcher.
 5. Later: optional Shizuku/ADB integrations, environments and themes, and

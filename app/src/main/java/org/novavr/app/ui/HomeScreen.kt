@@ -26,6 +26,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Color
+import org.novavr.app.mirror.MirrorState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,7 +50,13 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     settings: VRSettings,
     deviceInfo: DeviceInfo,
-    onStartVr: () -> Unit,
+    mirrorState: MirrorState,
+    mirroringSupported: Boolean,
+    onStartMirroring: () -> Unit,
+    onStopMirroring: () -> Unit,
+    onReturnToVr: () -> Unit,
+    onDismissMirrorError: () -> Unit,
+    onStartTestPattern: () -> Unit,
     onDisplayModeChange: (DisplayMode) -> Unit,
     onScreenSizeChange: (Float) -> Unit,
     onScreenDistanceChange: (Float) -> Unit,
@@ -59,7 +69,16 @@ fun HomeScreen(
         val primary: @Composable () -> Unit = {
             Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Branding()
-                StartVrCard(deviceInfo, onStartVr)
+                StartVrCard(
+                    deviceInfo = deviceInfo,
+                    mirrorState = mirrorState,
+                    mirroringSupported = mirroringSupported,
+                    onStartMirroring = onStartMirroring,
+                    onStopMirroring = onStopMirroring,
+                    onReturnToVr = onReturnToVr,
+                    onDismissMirrorError = onDismissMirrorError,
+                    onStartTestPattern = onStartTestPattern,
+                )
                 SectionCard("Display mode") {
                     DisplayModeSelector(
                         selected = settings.displayMode,
@@ -145,48 +164,120 @@ private fun Branding() {
 }
 
 @Composable
-private fun StartVrCard(deviceInfo: DeviceInfo, onStartVr: () -> Unit) {
+private fun StartVrCard(
+    deviceInfo: DeviceInfo,
+    mirrorState: MirrorState,
+    mirroringSupported: Boolean,
+    onStartMirroring: () -> Unit,
+    onStopMirroring: () -> Unit,
+    onReturnToVr: () -> Unit,
+    onDismissMirrorError: () -> Unit,
+    onStartTestPattern: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Button(
-            onClick = onStartVr,
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = ButtonDefaults.buttonColors(containerColor = NovaColors.Accent),
-        ) {
-            Icon(painterResource(R.drawable.ic_vr), contentDescription = null)
-            Spacer(Modifier.width(10.dp))
-            Text("Start VR", style = MaterialTheme.typography.titleMedium)
-        }
-        if (!deviceInfo.isVrCapable) {
-            Surface(
-                shape = MaterialTheme.shapes.small,
-                color = NovaColors.Warning.copy(alpha = 0.12f),
-                border = BorderStroke(1.dp, NovaColors.Warning.copy(alpha = 0.4f)),
-            ) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        painterResource(R.drawable.ic_warning),
-                        contentDescription = null,
-                        tint = NovaColors.Warning,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        when {
-                            !deviceInfo.glEs3Supported -> "OpenGL ES 3.0 is not supported on this device."
-                            else -> "Gyroscope or accelerometer missing: head tracking will not work."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
+        if (mirrorState is MirrorState.Active) {
+            ActiveMirrorCard(mirrorState, onStopMirroring, onReturnToVr)
         } else {
+            Button(
+                onClick = onStartMirroring,
+                enabled = mirroringSupported,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+                shape = MaterialTheme.shapes.large,
+                colors = ButtonDefaults.buttonColors(containerColor = NovaColors.Accent),
+            ) {
+                Icon(painterResource(R.drawable.ic_cast), contentDescription = null)
+                Spacer(Modifier.width(10.dp))
+                Text("Start screen mirroring", style = MaterialTheme.typography.titleMedium)
+            }
             Text(
-                "Place the phone in your headset with the screen divider centred.",
+                if (mirroringSupported) {
+                    "In the next dialog choose “A single app”, then pick the app to view in VR. " +
+                        "Put the phone in your headset with the screen divider centred."
+                } else {
+                    "Screen mirroring needs Android 14 or newer. The test pattern still works."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = NovaColors.TextSecondary,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
+        }
+        OutlinedButton(
+            onClick = onStartTestPattern,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Icon(painterResource(R.drawable.ic_vr), contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Test pattern VR")
+        }
+        if (mirrorState is MirrorState.Failed) {
+            Notice(
+                text = mirrorState.message,
+                color = NovaColors.Error,
+                action = "Dismiss",
+                onAction = onDismissMirrorError,
+            )
+        }
+        if (!deviceInfo.isVrCapable) {
+            Notice(
+                text = when {
+                    !deviceInfo.glEs3Supported -> "OpenGL ES 3.0 is not supported on this device."
+                    else -> "Gyroscope or accelerometer missing: head tracking will not work."
+                },
+                color = NovaColors.Warning,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActiveMirrorCard(state: MirrorState.Active, onStop: () -> Unit, onReturnToVr: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = NovaColors.AccentDim.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, NovaColors.Accent),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).background(NovaColors.Success, CircleShape))
+                Spacer(Modifier.width(8.dp))
+                Text("Screen mirroring is on", style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                "Sharing ${state.contentWidth} × ${state.contentHeight}" +
+                    if (state.vrVisible) " · VR view on" else " · VR view hidden",
+                style = MaterialTheme.typography.bodySmall,
+                color = NovaColors.TextSecondary,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onReturnToVr, shape = MaterialTheme.shapes.large, modifier = Modifier.weight(1f)) {
+                    Text("Return to VR")
+                }
+                OutlinedButton(onClick = onStop, shape = MaterialTheme.shapes.large, modifier = Modifier.weight(1f)) {
+                    Text("Stop")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Notice(text: String, color: Color, action: String? = null, onAction: () -> Unit = {}) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = color.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.4f)),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                painterResource(R.drawable.ic_warning),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            if (action != null) TextButton(onClick = onAction) { Text(action) }
         }
     }
 }

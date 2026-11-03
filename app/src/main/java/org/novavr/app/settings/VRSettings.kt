@@ -34,6 +34,10 @@ enum class DisplayMode {
  * @property renderScale Resolution of the eye buffer relative to the display.
  * @property preferHighRefreshRate Use the display's fastest refresh rate in VR.
  * @property showEnvironment Draw the floor grid around the virtual screen.
+ * @property mirrorResolutionScale Capture resolution relative to the shared
+ *   content. Content beyond what the headset can resolve only costs power.
+ * @property followContentOrientation Switch Portrait/Landscape automatically
+ *   when the mirrored content rotates.
  */
 data class VRSettings(
     val displayMode: DisplayMode = DisplayMode.LANDSCAPE,
@@ -43,6 +47,8 @@ data class VRSettings(
     val renderScale: Float = DEFAULT_RENDER_SCALE,
     val preferHighRefreshRate: Boolean = true,
     val showEnvironment: Boolean = true,
+    val mirrorResolutionScale: Float = DEFAULT_MIRROR_SCALE,
+    val followContentOrientation: Boolean = true,
 ) {
     /** Returns a copy with every value clamped to its supported range. */
     fun sanitized(): VRSettings = copy(
@@ -50,6 +56,7 @@ data class VRSettings(
         screenDistanceMeters = screenDistanceMeters.coerceIn(DISTANCE_RANGE),
         lensSeparationMm = lensSeparationMm?.coerceIn(LENS_SEPARATION_RANGE),
         renderScale = renderScale.coerceIn(RENDER_SCALE_RANGE),
+        mirrorResolutionScale = mirrorResolutionScale.coerceIn(MIRROR_SCALE_RANGE),
     )
 
     companion object {
@@ -57,11 +64,17 @@ data class VRSettings(
         const val DEFAULT_DISTANCE_METERS = 2.0f
         const val DEFAULT_RENDER_SCALE = 1.0f
         const val DEFAULT_LENS_SEPARATION_MM = 64f
+        const val DEFAULT_MIRROR_SCALE = 0.75f
+
+        /** Steps used by the in-VR size / distance controls. */
+        const val DIAGONAL_STEP = 5f
+        const val DISTANCE_STEP = 0.25f
 
         val DIAGONAL_RANGE = 20f..200f
         val DISTANCE_RANGE = 0.5f..6f
         val LENS_SEPARATION_RANGE = 50f..75f
         val RENDER_SCALE_RANGE = 0.5f..1.0f
+        val MIRROR_SCALE_RANGE = 0.5f..1.0f
     }
 }
 
@@ -99,6 +112,8 @@ class VRSettingsRepository(context: Context) {
             renderScale = prefs.getFloat(KEY_RENDER_SCALE, defaults.renderScale),
             preferHighRefreshRate = prefs.getBoolean(KEY_HIGH_REFRESH, defaults.preferHighRefreshRate),
             showEnvironment = prefs.getBoolean(KEY_ENVIRONMENT, defaults.showEnvironment),
+            mirrorResolutionScale = prefs.getFloat(KEY_MIRROR_SCALE, defaults.mirrorResolutionScale),
+            followContentOrientation = prefs.getBoolean(KEY_FOLLOW_CONTENT, defaults.followContentOrientation),
         ).sanitized()
     }
 
@@ -111,6 +126,8 @@ class VRSettingsRepository(context: Context) {
             putFloat(KEY_RENDER_SCALE, s.renderScale)
             putBoolean(KEY_HIGH_REFRESH, s.preferHighRefreshRate)
             putBoolean(KEY_ENVIRONMENT, s.showEnvironment)
+            putFloat(KEY_MIRROR_SCALE, s.mirrorResolutionScale)
+            putBoolean(KEY_FOLLOW_CONTENT, s.followContentOrientation)
         }
     }
 
@@ -123,5 +140,7 @@ class VRSettingsRepository(context: Context) {
         const val KEY_RENDER_SCALE = "render_scale"
         const val KEY_HIGH_REFRESH = "prefer_high_refresh"
         const val KEY_ENVIRONMENT = "show_environment"
+        const val KEY_MIRROR_SCALE = "mirror_resolution_scale"
+        const val KEY_FOLLOW_CONTENT = "follow_content_orientation"
     }
 }

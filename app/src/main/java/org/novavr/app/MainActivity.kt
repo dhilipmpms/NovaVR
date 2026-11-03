@@ -23,6 +23,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.novavr.app.mirror.MirrorLauncherDialogs
+import org.novavr.app.mirror.MirrorStatus
+import org.novavr.app.mirror.ScreenMirrorService
+import org.novavr.app.mirror.rememberMirrorLauncher
 import org.novavr.app.settings.VRSettingsRepository
 import org.novavr.app.ui.CalibrationScreen
 import org.novavr.app.ui.HomeScreen
@@ -48,6 +52,12 @@ class MainActivity : ComponentActivity() {
                     NovaVRApp(
                         repository = repository,
                         onStartVr = { calibration -> startActivity(VRActivity.intent(this, calibration)) },
+                        onReturnToVr = {
+                            // Reveal the shared app below NovaVR, then show VR over it.
+                            moveTaskToBack(true)
+                            startService(ScreenMirrorService.showVrIntent(this))
+                        },
+                        onStopMirroring = { startService(ScreenMirrorService.stopIntent(this)) },
                     )
                 }
             }
@@ -56,8 +66,17 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun NovaVRApp(repository: VRSettingsRepository, onStartVr: (calibration: Boolean) -> Unit) {
+private fun NovaVRApp(
+    repository: VRSettingsRepository,
+    onStartVr: (calibration: Boolean) -> Unit,
+    onReturnToVr: () -> Unit,
+    onStopMirroring: () -> Unit,
+) {
     val settings by repository.settings.collectAsStateWithLifecycle()
+    val mirrorState by MirrorStatus.state.collectAsStateWithLifecycle()
+    // Once mirroring starts, NovaVR steps aside so the shared app stays visible.
+    val mirrorLauncher = rememberMirrorLauncher()
+    MirrorLauncherDialogs(mirrorLauncher)
     val context = androidx.compose.ui.platform.LocalContext.current
     val deviceInfo = remember { DeviceInfo.query(context) }
     val profileLensSeparationMm = remember {
@@ -75,7 +94,13 @@ private fun NovaVRApp(repository: VRSettingsRepository, onStartVr: (calibration:
             Destination.HOME -> HomeScreen(
                 settings = settings,
                 deviceInfo = deviceInfo,
-                onStartVr = { onStartVr(false) },
+                mirrorState = mirrorState,
+                mirroringSupported = ScreenMirrorService.isSupported,
+                onStartMirroring = mirrorLauncher::start,
+                onStopMirroring = onStopMirroring,
+                onReturnToVr = onReturnToVr,
+                onDismissMirrorError = MirrorStatus::clearError,
+                onStartTestPattern = { onStartVr(false) },
                 onDisplayModeChange = { mode -> repository.update { it.copy(displayMode = mode) } },
                 onScreenSizeChange = { v -> repository.update { it.copy(screenDiagonalInches = v) } },
                 onScreenDistanceChange = { v -> repository.update { it.copy(screenDistanceMeters = v) } },

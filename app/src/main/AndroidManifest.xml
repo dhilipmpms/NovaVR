@@ -17,6 +17,17 @@
     <!-- Gyroscope sampling above 200 Hz (Android 12+) for low-latency tracking. -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
 
+    <!-- Screen mirroring (0.2). MediaProjection itself needs no permission:
+         the user grants each session in a system consent dialog. -->
+    <!-- Capture runs in a foreground service of type mediaProjection (Android 14+). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- The VR view is drawn over the shared app so that app keeps running
+         (an activity on top would stop it). Granted by the user in Settings. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Ongoing notification with Stop / Show VR actions (Android 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name=".NovaVRApplication"
         android:allowBackup="false"
@@ -29,6 +40,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -46,5 +58,10 @@
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.NovaVR.Immersive" />
+
+        <service
+            android:name=".mirror.ScreenMirrorService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>
