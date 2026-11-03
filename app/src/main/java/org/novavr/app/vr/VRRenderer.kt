@@ -11,6 +11,8 @@ import android.opengl.Matrix
 import android.os.SystemClock
 import android.util.Log
 import android.opengl.GLES11Ext
+import org.novavr.app.input.CursorSnapshot
+import org.novavr.app.input.NovaCommand
 import org.novavr.app.mirror.MirrorSource
 import org.novavr.app.settings.DisplayMode
 import org.novavr.app.settings.VRSettings
@@ -40,6 +42,9 @@ internal class VRRenderer(
     initialSettings: VRSettings,
     private val calibrationMode: Boolean,
     private val mirrorSource: MirrorSource?,
+    /** Virtual mouse cursor; null disables cursor rendering. */
+    private val cursorSource: (() -> CursorSnapshot)?,
+    dock: List<NovaCommand>,
     private val listener: Listener,
 ) : GLSurfaceView.Renderer {
 
@@ -69,6 +74,11 @@ internal class VRRenderer(
     private var environment = Environment()
     private var eyeMarkers = EyeMarkers()
     private var blankProbe = BlankFrameProbe()
+    private val dockItems = dock
+    private var cursorRenderer = CursorRenderer(dockItems)
+    private var cursorSnapshot: CursorSnapshot? = null
+    private var frameNanos = 0L
+    private val fitted = FloatArray(2)
 
     private val pendingSettings = AtomicReference<VRSettings?>(null)
     private var settings = initialSettings
@@ -98,7 +108,14 @@ internal class VRRenderer(
         Matrix.multiplyMM(eyeView, 0, eyeFromHead, 0, headView, 0)
         Matrix.multiplyMM(viewProjection, 0, projection, 0, eyeView, 0)
         if (settings.showEnvironment) environment.draw(viewProjection)
-        virtualScreen.draw(viewProjection, if (mirrorSource != null) mirrorTexture else testPattern)
+        val content = if (mirrorSource != null) mirrorTexture else testPattern
+        virtualScreen.draw(viewProjection, content)
+        cursorSnapshot?.let { cursor ->
+            VirtualScreen.fitContent(virtualScreen.widthMeters, virtualScreen.heightMeters, content.aspect, fitted)
+            cursorRenderer.draw(
+                viewProjection, cursor, frameNanos, fitted[0], fitted[1], virtualScreen.distanceMeters,
+            )
+        }
         if (calibrationMode) {
             // Head-locked: ignores head rotation, keeps per-eye stereo offset.
             Matrix.multiplyMM(eyeProjection, 0, projection, 0, eyeFromHead, 0)
@@ -130,6 +147,7 @@ internal class VRRenderer(
             virtualScreen.init(external = mirrorSource != null)
             environment.init()
             if (calibrationMode) eyeMarkers.init()
+            if (cursorSource != null) cursorRenderer.init()
             if (mirrorSource != null) {
                 mirrorTextureName = GlUtil.createExternalTexture()
                 mirrorSource.attach(mirrorTextureName)
@@ -160,6 +178,9 @@ internal class VRRenderer(
             updateTestPattern()
         }
 
+        // One cursor snapshot per frame: both eyes draw identical cursor state.
+        frameNanos = SystemClock.elapsedRealtimeNanos()
+        cursorSnapshot = cursorSource?.invoke()
         headTracker.getHeadView(predictionNanos, headView)
         stereo.render(eyeDrawer)
         trackFrameRate()
@@ -170,6 +191,7 @@ internal class VRRenderer(
         if (!glInitialized) return
         mirrorSource?.detach()
         blankProbe.release()
+        cursorRenderer.release()
         GlUtil.deleteTexture(mirrorTextureName)
         mirrorTextureName = 0
         mirrorTexture.id = 0
@@ -203,6 +225,7 @@ internal class VRRenderer(
         environment = Environment()
         eyeMarkers = EyeMarkers()
         blankProbe = BlankFrameProbe()
+        cursorRenderer = CursorRenderer(dockItems)
         glInitialized = false
     }
 

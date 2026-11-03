@@ -23,6 +23,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import org.novavr.app.input.CursorSnapshot
+import org.novavr.app.input.NovaCommand
 import org.novavr.app.mirror.MirrorSource
 import org.novavr.app.settings.VRSettings
 import org.novavr.app.settings.VRSettingsRepository
@@ -62,6 +64,8 @@ class VRSession(
     private val settingsRepository: VRSettingsRepository,
     calibrationMode: Boolean,
     mirrorSource: MirrorSource?,
+    cursorSource: (() -> CursorSnapshot)?,
+    dock: List<NovaCommand>,
     private val displayProvider: () -> Display?,
     private val onPreferredDisplayMode: (modeId: Int) -> Unit,
 ) {
@@ -96,6 +100,8 @@ class VRSession(
             initialSettings = settingsRepository.current,
             calibrationMode = calibrationMode,
             mirrorSource = mirrorSource,
+            cursorSource = cursorSource,
+            dock = dock,
             listener = object : VRRenderer.Listener {
                 override fun onFrameStats(
                     fps: Float,

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.Display
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +19,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.novavr.app.input.NovaCommand
+import org.novavr.app.input.VRInputController
 import org.novavr.app.mirror.MirrorLauncherDialogs
 import org.novavr.app.mirror.ScreenMirrorService
 import org.novavr.app.mirror.rememberMirrorLauncher
@@ -38,6 +41,7 @@ import org.novavr.app.ui.theme.NovaVRTheme
 class VRActivity : ComponentActivity() {
 
     private lateinit var session: VRSession
+    private lateinit var input: VRInputController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,11 +49,26 @@ class VRActivity : ComponentActivity() {
         val repository = novaApp.settings
         configureWindow()
 
+        input = VRInputController(
+            context = this,
+            mirroring = false,
+            dock = TEST_DOCK,
+            onCommand = ::onCommand,
+            captureView = { window.decorView },
+            onPassThroughChanged = {},
+        )
+        window.decorView.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnCapturedPointerListener { _, event -> input.onCapturedPointer(event) }
+        }
         session = VRSession(
             context = this,
             settingsRepository = repository,
             calibrationMode = calibrationMode,
             mirrorSource = null,
+            cursorSource = { input.cursor.snapshot },
+            dock = TEST_DOCK,
             displayProvider = ::currentDisplay,
             onPreferredDisplayMode = { modeId ->
                 if (window.attributes.preferredDisplayModeId != modeId) {
@@ -60,6 +79,7 @@ class VRActivity : ComponentActivity() {
 
         setContent {
             val settings by repository.settings.collectAsStateWithLifecycle()
+            val inputStatus by input.status.collectAsStateWithLifecycle()
             // Starting mirroring hands VR over to the overlay window.
             val mirrorLauncher = rememberMirrorLauncher(onStarted = ::finish)
             NovaVRTheme {
@@ -78,6 +98,7 @@ class VRActivity : ComponentActivity() {
                         onAdjustDistance = session::adjustScreenDistance,
                         onStartMirroring = if (ScreenMirrorService.isSupported) mirrorLauncher::start else null,
                     ),
+                    inputLine = inputStatus.summary(mirroring = false),
                 )
                 MirrorLauncherDialogs(mirrorLauncher)
             }
@@ -87,22 +108,48 @@ class VRActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         session.resume()
+        input.start()
         hideSystemBars()
     }
 
     override fun onPause() {
+        input.stop()
         session.pause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        input.destroy()
         session.destroy()
         super.onDestroy()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) {
+            hideSystemBars()
+            window.decorView.requestFocus()
+        }
+        input.onWindowFocusChanged(hasFocus)
+    }
+
+    // Overrides the public framework Activity method; lint confuses it with
+    // androidx.core's restricted ComponentActivity declaration.
+    @android.annotation.SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        input.onKey(event) || super.dispatchKeyEvent(event)
+
+    private fun onCommand(command: NovaCommand) {
+        when (command) {
+            NovaCommand.RECENTER -> session.recenter()
+            NovaCommand.TOGGLE_MODE -> session.toggleDisplayMode()
+            NovaCommand.HIDE_VR, NovaCommand.STOP_MIRRORING -> finish()
+            NovaCommand.CLOSER -> session.adjustScreenDistance(-1)
+            NovaCommand.FARTHER -> session.adjustScreenDistance(1)
+            NovaCommand.BIGGER -> session.adjustScreenSize(1)
+            NovaCommand.SMALLER -> session.adjustScreenSize(-1)
+            NovaCommand.TOGGLE_CURSOR -> novaApp.settings.update { it.copy(cursorVisible = !it.cursorVisible) }
+        }
     }
 
     private fun configureWindow() {
@@ -136,6 +183,10 @@ class VRActivity : ComponentActivity() {
     }
 
     companion object {
+        private val TEST_DOCK = listOf(
+            NovaCommand.HIDE_VR, NovaCommand.TOGGLE_MODE, NovaCommand.RECENTER,
+            NovaCommand.SMALLER, NovaCommand.BIGGER, NovaCommand.CLOSER, NovaCommand.FARTHER,
+        )
         private const val EXTRA_CALIBRATION = "org.novavr.app.extra.CALIBRATION"
 
         fun intent(context: Context, calibration: Boolean = false): Intent =

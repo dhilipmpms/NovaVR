@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">NovaVR</string>
     <string name="tagline">Your Smartphone. Your Virtual Workspace.</string>
+    <string name="accessibility_label">NovaVR mouse &amp; keyboard</string>
+    <string name="accessibility_description">Lets NovaVR send your Bluetooth/USB mouse clicks, scrolling and keyboard typing to the app you are mirroring in VR. Used only while VR screen mirroring is active. NovaVR does not record, store or transmit what is on screen or what you type.</string>
 </resources>

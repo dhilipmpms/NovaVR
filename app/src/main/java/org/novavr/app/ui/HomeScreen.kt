@@ -40,6 +40,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import org.novavr.app.BuildConfig
 import org.novavr.app.R
+import org.novavr.app.novaApp
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.novavr.app.settings.DisplayMode
 import org.novavr.app.settings.VRSettings
 import org.novavr.app.ui.theme.NovaColors
@@ -334,6 +337,16 @@ private fun DeviceCard(info: DeviceInfo) {
             "Accelerometer",
             if (info.hasAccelerometer) "Available" else "Not found",
             if (info.hasAccelerometer) NovaColors.Success else NovaColors.Error,
+        )
+        val input by androidx.compose.ui.platform.LocalContext.current.novaApp.inputDevices.devices
+            .collectAsStateWithLifecycle()
+        InfoRow(
+            "Mouse / keyboard",
+            listOfNotNull(
+                input.mice.firstOrNull()?.let { "Mouse ✓" },
+                input.keyboards.firstOrNull()?.let { "Keyboard ✓" },
+            ).joinToString(" · ").ifEmpty { "None connected" },
+            if (input.hasMouse || input.hasKeyboard) NovaColors.Success else NovaColors.TextSecondary,
         )
         InfoRow(
             "VR ready",

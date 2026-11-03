@@ -76,7 +76,8 @@ internal class VirtualScreen {
         private set
     var heightMeters = 1f
         private set
-    private var distanceMeters = 2f
+    var distanceMeters = 2f
+        private set
     private var bezelMeters = 0.02f
 
     private val model = FloatArray(16)

@@ -13,8 +13,8 @@ android {
         applicationId = "org.novavr.app"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -40,6 +40,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true
     }
 
     // Keep APKs reproducible (no Google-encrypted dependency metadata).
@@ -66,6 +67,11 @@ kotlin {
 
 dependencies {
     implementation(project(":cardboard"))
+
+    // Optional Shizuku integration (Apache-2.0). Only used when the user
+    // installs and authorises Shizuku; NovaVR works without it.
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

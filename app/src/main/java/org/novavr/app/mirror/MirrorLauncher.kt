@@ -52,7 +52,7 @@ class MirrorLauncher internal constructor(private val context: Context) {
             message = "Screen mirroring needs Android 14 or newer (single-app screen sharing)."
             return
         }
-        if (!Settings.canDrawOverlays(context)) {
+        if (!ScreenMirrorService.canShowOverlay(context)) {
             showOverlayPermissionDialog = true
             return
         }

@@ -140,6 +140,8 @@ fun SettingsScreen(
                 )
             }
 
+            InputSettingsSection(settings = settings, onUpdate = onUpdate)
+
             SectionCard("Headset") {
                 val custom = settings.lensSeparationMm != null
                 val profileValue = profileLensSeparationMm ?: VRSettings.DEFAULT_LENS_SEPARATION_MM

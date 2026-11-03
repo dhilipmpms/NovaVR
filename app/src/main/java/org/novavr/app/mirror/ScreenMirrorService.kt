@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.novavr.app.MainActivity
 import org.novavr.app.R
+import org.novavr.app.input.accessibility.NovaAccessibilityService
 import org.novavr.app.novaApp
 import org.novavr.app.settings.DisplayMode
 import kotlin.math.max
@@ -159,9 +160,9 @@ class ScreenMirrorService : Service() {
             fail("Screen capture permission was not granted.")
             return
         }
-        if (!Settings.canDrawOverlays(this)) {
+        if (!canShowOverlay(this)) {
             mediaProjection.stop()
-            fail("NovaVR needs “Display over other apps” to show VR over the shared app.")
+            fail("NovaVR needs “Display over other apps” (or its Accessibility service) to show VR over the shared app.")
             return
         }
         projection = mediaProjection
@@ -210,6 +211,18 @@ class ScreenMirrorService : Service() {
             this, screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
 
+        // Accessibility switched on/off mid-session: re-host the VR window so
+        // it is a trusted overlay whenever possible (see VROverlayWindow).
+        scope.launch {
+            NovaAccessibilityService.instance.collect { a11y ->
+                val window = overlay ?: return@collect
+                if (window.isShowing && window.isTrustedOverlay != (a11y != null)) {
+                    window.dismiss()
+                    showVr()
+                }
+            }
+        }
+
         // Resolution / follow-orientation preferences may change mid-session.
         scope.launch {
             novaApp.settings.settings
@@ -226,7 +239,7 @@ class ScreenMirrorService : Service() {
     private fun showVr() {
         val mirrorSource = source ?: return
         if (overlay?.isShowing == true) return
-        if (!Settings.canDrawOverlays(this)) return
+        if (!canShowOverlay(this)) return
         val window = overlay ?: VROverlayWindow(
             serviceContext = this,
             settingsRepository = novaApp.settings,
@@ -389,6 +402,10 @@ class ScreenMirrorService : Service() {
         private const val ACTION_HIDE_VR = "org.novavr.app.mirror.HIDE_VR"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
+
+        /** VR can be drawn over other apps: overlay permission or Accessibility service. */
+        fun canShowOverlay(context: Context): Boolean =
+            Settings.canDrawOverlays(context) || NovaAccessibilityService.instance.value != null
 
         /** Mirroring needs single-app capture and its callbacks (Android 14). */
         val isSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE

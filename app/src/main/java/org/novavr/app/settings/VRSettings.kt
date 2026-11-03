@@ -24,6 +24,27 @@ enum class DisplayMode {
     fun toggled(): DisplayMode = if (this == PORTRAIT) LANDSCAPE else PORTRAIT
 }
 
+/** How mouse / keyboard input reaches the mirrored app. */
+enum class InputMode {
+    /** Best available: Shizuku if authorised, else Accessibility, else VR only. */
+    AUTO,
+
+    /** Accessibility gestures and text actions (least privilege). */
+    ACCESSIBILITY,
+
+    /** Shizuku-injected native mouse events (+ Accessibility for typing). */
+    SHIZUKU,
+
+    /** Cursor and NovaVR shortcuts only; nothing is sent to other apps. */
+    VR_ONLY,
+}
+
+/** Right mouse button in Accessibility mode (Shizuku sends a real right click). */
+enum class RightClickAction { BACK, LONG_PRESS }
+
+/** Modifier that turns a key into a NovaVR shortcut. */
+enum class ShortcutModifier { CTRL_ALT, META, DISABLED }
+
 /**
  * User-adjustable VR configuration. Immutable; persisted by [VRSettingsRepository].
  *
@@ -49,6 +70,14 @@ data class VRSettings(
     val showEnvironment: Boolean = true,
     val mirrorResolutionScale: Float = DEFAULT_MIRROR_SCALE,
     val followContentOrientation: Boolean = true,
+    // Input (0.3)
+    val inputMode: InputMode = InputMode.AUTO,
+    val cursorVisible: Boolean = true,
+    val cursorSensitivity: Float = 1f,
+    val scrollSensitivity: Float = 1f,
+    val cursorAutoHideSeconds: Int = 5,
+    val rightClickAction: RightClickAction = RightClickAction.BACK,
+    val shortcutModifier: ShortcutModifier = ShortcutModifier.CTRL_ALT,
 ) {
     /** Returns a copy with every value clamped to its supported range. */
     fun sanitized(): VRSettings = copy(
@@ -57,6 +86,9 @@ data class VRSettings(
         lensSeparationMm = lensSeparationMm?.coerceIn(LENS_SEPARATION_RANGE),
         renderScale = renderScale.coerceIn(RENDER_SCALE_RANGE),
         mirrorResolutionScale = mirrorResolutionScale.coerceIn(MIRROR_SCALE_RANGE),
+        cursorSensitivity = cursorSensitivity.coerceIn(SENSITIVITY_RANGE),
+        scrollSensitivity = scrollSensitivity.coerceIn(SENSITIVITY_RANGE),
+        cursorAutoHideSeconds = cursorAutoHideSeconds.coerceIn(0, 60),
     )
 
     companion object {
@@ -75,6 +107,8 @@ data class VRSettings(
         val LENS_SEPARATION_RANGE = 50f..75f
         val RENDER_SCALE_RANGE = 0.5f..1.0f
         val MIRROR_SCALE_RANGE = 0.5f..1.0f
+        val SENSITIVITY_RANGE = 0.25f..4f
+        val AUTO_HIDE_CHOICES = listOf(0, 3, 5, 10)
     }
 }
 
@@ -114,6 +148,13 @@ class VRSettingsRepository(context: Context) {
             showEnvironment = prefs.getBoolean(KEY_ENVIRONMENT, defaults.showEnvironment),
             mirrorResolutionScale = prefs.getFloat(KEY_MIRROR_SCALE, defaults.mirrorResolutionScale),
             followContentOrientation = prefs.getBoolean(KEY_FOLLOW_CONTENT, defaults.followContentOrientation),
+            inputMode = enumPref(KEY_INPUT_MODE, defaults.inputMode),
+            cursorVisible = prefs.getBoolean(KEY_CURSOR_VISIBLE, defaults.cursorVisible),
+            cursorSensitivity = prefs.getFloat(KEY_CURSOR_SENS, defaults.cursorSensitivity),
+            scrollSensitivity = prefs.getFloat(KEY_SCROLL_SENS, defaults.scrollSensitivity),
+            cursorAutoHideSeconds = prefs.getInt(KEY_CURSOR_HIDE, defaults.cursorAutoHideSeconds),
+            rightClickAction = enumPref(KEY_RIGHT_CLICK, defaults.rightClickAction),
+            shortcutModifier = enumPref(KEY_SHORTCUT_MOD, defaults.shortcutModifier),
         ).sanitized()
     }
 
@@ -128,8 +169,18 @@ class VRSettingsRepository(context: Context) {
             putBoolean(KEY_ENVIRONMENT, s.showEnvironment)
             putFloat(KEY_MIRROR_SCALE, s.mirrorResolutionScale)
             putBoolean(KEY_FOLLOW_CONTENT, s.followContentOrientation)
+            putString(KEY_INPUT_MODE, s.inputMode.name)
+            putBoolean(KEY_CURSOR_VISIBLE, s.cursorVisible)
+            putFloat(KEY_CURSOR_SENS, s.cursorSensitivity)
+            putFloat(KEY_SCROLL_SENS, s.scrollSensitivity)
+            putInt(KEY_CURSOR_HIDE, s.cursorAutoHideSeconds)
+            putString(KEY_RIGHT_CLICK, s.rightClickAction.name)
+            putString(KEY_SHORTCUT_MOD, s.shortcutModifier.name)
         }
     }
+
+    private inline fun <reified E : Enum<E>> enumPref(key: String, default: E): E =
+        prefs.getString(key, null)?.let { name -> enumValues<E>().firstOrNull { it.name == name } } ?: default
 
     private companion object {
         const val PREFS_NAME = "novavr_settings"
@@ -142,5 +193,12 @@ class VRSettingsRepository(context: Context) {
         const val KEY_ENVIRONMENT = "show_environment"
         const val KEY_MIRROR_SCALE = "mirror_resolution_scale"
         const val KEY_FOLLOW_CONTENT = "follow_content_orientation"
+        const val KEY_INPUT_MODE = "input_mode"
+        const val KEY_CURSOR_VISIBLE = "cursor_visible"
+        const val KEY_CURSOR_SENS = "cursor_sensitivity"
+        const val KEY_SCROLL_SENS = "scroll_sensitivity"
+        const val KEY_CURSOR_HIDE = "cursor_auto_hide_s"
+        const val KEY_RIGHT_CLICK = "right_click_action"
+        const val KEY_SHORTCUT_MOD = "shortcut_modifier"
     }
 }

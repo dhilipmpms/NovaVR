@@ -80,6 +80,7 @@ fun VROverlay(
     calibrationMode: Boolean,
     mirror: MirrorOverlayInfo?,
     controls: VRControls,
+    inputLine: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     var showTuning by remember { mutableStateOf(false) }
@@ -184,6 +185,7 @@ fun VROverlay(
                 if (mirror != null) append("Mirroring  ·  ")
                 if (state.fps > 0f) append("${state.fps.roundToInt()} fps")
                 if (mirror != null && state.hasCapturedFrame) append("  ·  capture ${state.captureFps.roundToInt()} fps")
+                if (inputLine != null) append("  ·  $inputLine")
             },
             style = MaterialTheme.typography.bodySmall,
             color = Color.White.copy(alpha = 0.5f),

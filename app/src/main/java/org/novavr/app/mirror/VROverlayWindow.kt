@@ -31,6 +31,9 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import org.novavr.app.BuildConfig
+import org.novavr.app.input.NovaCommand
+import org.novavr.app.input.VRInputController
+import org.novavr.app.input.accessibility.NovaAccessibilityService
 import org.novavr.app.settings.VRSettingsRepository
 import org.novavr.app.ui.MirrorOverlayInfo
 import org.novavr.app.ui.VRControls
@@ -52,7 +55,17 @@ import org.novavr.app.vr.VRSession
  * anyway; if the user shares the entire screen instead, the overlay appears
  * black in the capture rather than recursively containing itself.
  *
- * Requires the "Display over other apps" permission. Main thread only.
+ * Window type (decided each time the window is shown):
+ *  - **Accessibility overlay** (`TYPE_ACCESSIBILITY_OVERLAY`, added through
+ *    NovaVR's Accessibility service) when that service is enabled. It is a
+ *    *trusted* overlay: since Android 12, touches that pass through an opaque
+ *    overlay of another app are dropped as "untrusted" — except for
+ *    accessibility overlays. Mouse clicks injected into the shared app only
+ *    work with this window type.
+ *  - **Application overlay** (`TYPE_APPLICATION_OVERLAY`, "Display over other
+ *    apps") otherwise: VR viewing works, but clicks cannot pass through.
+ *
+ * Main thread only.
  */
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 internal class VROverlayWindow(
@@ -64,15 +77,25 @@ internal class VROverlayWindow(
 ) {
     private val display: Display = serviceContext.getSystemService(android.hardware.display.DisplayManager::class.java)
         .getDisplay(Display.DEFAULT_DISPLAY)
-    private val context: Context =
+    private val overlayContext: Context by lazy {
         serviceContext.createWindowContext(display, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
-    private val windowManager = context.getSystemService(WindowManager::class.java)
+    }
+
+    // Chosen in show(): accessibility service context or overlay window context.
+    private var context: Context = serviceContext
+    private var windowManager: WindowManager = serviceContext.getSystemService(WindowManager::class.java)
+    private var windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+
+    /** True when hosted as a trusted accessibility overlay. */
+    var isTrustedOverlay = false
+        private set
 
     private val lifecycleOwner = OverlayLifecycleOwner()
     private var root: OverlayRoot? = null
     private var session: VRSession? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var contentVisibleState by mutableStateOf(true)
+    private var input: VRInputController? = null
 
     val isShowing: Boolean get() = root != null
 
@@ -89,13 +112,35 @@ internal class VROverlayWindow(
 
     fun show() {
         if (root != null) return
+        val a11y = NovaAccessibilityService.instance.value
+        if (a11y != null) {
+            context = a11y
+            windowManager = a11y.getSystemService(WindowManager::class.java)
+            windowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        } else {
+            context = overlayContext
+            windowManager = overlayContext.getSystemService(WindowManager::class.java)
+            windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        }
+        isTrustedOverlay = a11y != null
         val params = createLayoutParams()
-        val vrSession = VRSession(
+        lateinit var vrSession: VRSession
+        val inputController = VRInputController(
+            context = context,
+            mirroring = true,
+            dock = MIRROR_DOCK,
+            onCommand = { command -> onCommand(command, vrSession) },
+            captureView = { root },
+            onPassThroughChanged = ::setPassThrough,
+        )
+        vrSession = VRSession(
             context = context,
             settingsRepository = settingsRepository,
             calibrationMode = false,
             mirrorSource = source,
-            displayProvider = { context.display },
+            cursorSource = { inputController.cursor.snapshot },
+            dock = MIRROR_DOCK,
+            displayProvider = { display },
             onPreferredDisplayMode = { modeId -> updatePreferredMode(modeId) },
         )
         val controls = VRControls(
@@ -111,6 +156,7 @@ internal class VROverlayWindow(
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
             setContent {
                 val settings by settingsRepository.settings.collectAsState()
+                val inputStatus by inputController.status.collectAsState()
                 NovaVRTheme {
                     VROverlay(
                         glView = vrSession.glView,
@@ -119,11 +165,12 @@ internal class VROverlayWindow(
                         calibrationMode = false,
                         mirror = MirrorOverlayInfo(contentVisible = contentVisibleState),
                         controls = controls,
+                        inputLine = inputStatus.summary(mirroring = true),
                     )
                 }
             }
         }
-        val view = OverlayRoot(context, onBack = onHideRequested).apply {
+        val view = OverlayRoot(context, inputController, onBack = onHideRequested).apply {
             addView(composeView)
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
@@ -139,11 +186,49 @@ internal class VROverlayWindow(
         root = view
         session = vrSession
         layoutParams = params
+        input = inputController
+        inputController.start()
+    }
+
+    private fun onCommand(command: NovaCommand, vrSession: VRSession) {
+        when (command) {
+            NovaCommand.RECENTER -> vrSession.recenter()
+            NovaCommand.TOGGLE_MODE -> vrSession.toggleDisplayMode()
+            NovaCommand.HIDE_VR -> onHideRequested()
+            NovaCommand.STOP_MIRRORING -> onStopRequested()
+            NovaCommand.CLOSER -> vrSession.adjustScreenDistance(-1)
+            NovaCommand.FARTHER -> vrSession.adjustScreenDistance(1)
+            NovaCommand.BIGGER -> vrSession.adjustScreenSize(1)
+            NovaCommand.SMALLER -> vrSession.adjustScreenSize(-1)
+            NovaCommand.TOGGLE_CURSOR -> settingsRepository.update { it.copy(cursorVisible = !it.cursorVisible) }
+        }
+    }
+
+    /**
+     * While a mouse drives the shared app, the overlay must not catch touches:
+     * clicks injected at the cursor position (Accessibility gestures or Shizuku
+     * events) are hit-tested like real touches and would otherwise land on
+     * NovaVR itself. Pointer capture and keys still reach the overlay because
+     * they follow window focus, not touchability.
+     */
+    private fun setPassThrough(passThrough: Boolean) {
+        val view = root ?: return
+        val params = layoutParams ?: return
+        val flags = if (passThrough) {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        if (flags == params.flags) return
+        params.flags = flags
+        windowManager.updateViewLayout(view, params)
     }
 
     /** Removes the window. GL resources are released before the view goes away. */
     fun dismiss() {
         val view = root ?: return
+        input?.destroy()
+        input = null
         session?.destroy() // blocks until the GL thread has released its objects
         session = null
         lifecycleOwner.moveTo(Lifecycle.State.CREATED)
@@ -163,7 +248,7 @@ internal class VROverlayWindow(
     private fun createLayoutParams() = WindowManager.LayoutParams(
         WindowManager.LayoutParams.MATCH_PARENT,
         WindowManager.LayoutParams.MATCH_PARENT,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        windowType,
         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
@@ -185,9 +270,34 @@ internal class VROverlayWindow(
             .invoke(null, key) as String
     }.getOrNull()
 
-    /** Root view handling Back for a window that has no Activity. */
-    private class OverlayRoot(context: Context, private val onBack: () -> Unit) : FrameLayout(context) {
+    /**
+     * Root view: owns pointer capture and receives keys (window focus), and
+     * handles Back for a window that has no Activity.
+     */
+    private class OverlayRoot(
+        context: Context,
+        private val input: VRInputController,
+        private val onBack: () -> Unit,
+    ) : FrameLayout(context) {
         private val backCallback = OnBackInvokedCallback { onBack() }
+
+        init {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnCapturedPointerListener { _, event -> input.onCapturedPointer(event) }
+        }
+
+        override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+            super.onWindowFocusChanged(hasWindowFocus)
+            // Captured pointer events go to the focused view.
+            if (hasWindowFocus) requestFocus()
+            input.onWindowFocusChanged(hasWindowFocus)
+        }
+
+        override fun onPointerCaptureChange(hasCapture: Boolean) {
+            super.onPointerCaptureChange(hasCapture)
+            input.onPointerCaptureChanged(hasCapture)
+        }
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
@@ -203,12 +313,21 @@ internal class VROverlayWindow(
         }
 
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            // Physical keyboards first: NovaVR shortcuts, system keys, typing.
+            if (input.onKey(event)) return true
             if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                 if (event.action == KeyEvent.ACTION_UP) onBack()
                 return true
             }
             return super.dispatchKeyEvent(event)
         }
+    }
+
+    private companion object {
+        val MIRROR_DOCK = listOf(
+            NovaCommand.STOP_MIRRORING, NovaCommand.HIDE_VR, NovaCommand.TOGGLE_MODE, NovaCommand.RECENTER,
+            NovaCommand.SMALLER, NovaCommand.BIGGER, NovaCommand.CLOSER, NovaCommand.FARTHER,
+        )
     }
 
     /** Minimal lifecycle + saved-state owner so Compose can run in a service window. */
