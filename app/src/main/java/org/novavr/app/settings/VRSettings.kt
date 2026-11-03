@@ -1,0 +1,127 @@
+/*
+ * NovaVR - Your Smartphone. Your Virtual Workspace.
+ * Copyright (C) 2026 NovaVR contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+package org.novavr.app.settings
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.core.content.edit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+
+/** Shape of the virtual screen shown in VR. */
+enum class DisplayMode {
+    /** Phone-like virtual screen using the device's portrait proportions. */
+    PORTRAIT,
+
+    /** Wide virtual screen using the device's landscape proportions. */
+    LANDSCAPE;
+
+    fun toggled(): DisplayMode = if (this == PORTRAIT) LANDSCAPE else PORTRAIT
+}
+
+/**
+ * User-adjustable VR configuration. Immutable; persisted by [VRSettingsRepository].
+ *
+ * @property screenDiagonalInches Diagonal of the virtual screen (like a TV size).
+ * @property screenDistanceMeters Distance from the viewer to the virtual screen.
+ * @property lensSeparationMm Lens centre separation override, or null to use the
+ *   headset profile's value.
+ * @property renderScale Resolution of the eye buffer relative to the display.
+ * @property preferHighRefreshRate Use the display's fastest refresh rate in VR.
+ * @property showEnvironment Draw the floor grid around the virtual screen.
+ */
+data class VRSettings(
+    val displayMode: DisplayMode = DisplayMode.LANDSCAPE,
+    val screenDiagonalInches: Float = DEFAULT_DIAGONAL_INCHES,
+    val screenDistanceMeters: Float = DEFAULT_DISTANCE_METERS,
+    val lensSeparationMm: Float? = null,
+    val renderScale: Float = DEFAULT_RENDER_SCALE,
+    val preferHighRefreshRate: Boolean = true,
+    val showEnvironment: Boolean = true,
+) {
+    /** Returns a copy with every value clamped to its supported range. */
+    fun sanitized(): VRSettings = copy(
+        screenDiagonalInches = screenDiagonalInches.coerceIn(DIAGONAL_RANGE),
+        screenDistanceMeters = screenDistanceMeters.coerceIn(DISTANCE_RANGE),
+        lensSeparationMm = lensSeparationMm?.coerceIn(LENS_SEPARATION_RANGE),
+        renderScale = renderScale.coerceIn(RENDER_SCALE_RANGE),
+    )
+
+    companion object {
+        const val DEFAULT_DIAGONAL_INCHES = 70f
+        const val DEFAULT_DISTANCE_METERS = 2.0f
+        const val DEFAULT_RENDER_SCALE = 1.0f
+        const val DEFAULT_LENS_SEPARATION_MM = 64f
+
+        val DIAGONAL_RANGE = 20f..200f
+        val DISTANCE_RANGE = 0.5f..6f
+        val LENS_SEPARATION_RANGE = 50f..75f
+        val RENDER_SCALE_RANGE = 0.5f..1.0f
+    }
+}
+
+/**
+ * SharedPreferences backed settings store exposing a [StateFlow].
+ * Kept dependency-free (no DataStore) on purpose: the data is tiny.
+ */
+class VRSettingsRepository(context: Context) {
+
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val _settings = MutableStateFlow(load())
+    val settings: StateFlow<VRSettings> = _settings.asStateFlow()
+
+    val current: VRSettings get() = _settings.value
+
+    fun update(transform: (VRSettings) -> VRSettings) {
+        _settings.update { old ->
+            transform(old).sanitized().also { if (it != old) save(it) }
+        }
+    }
+
+    fun resetToDefaults() = update { VRSettings() }
+
+    private fun load(): VRSettings {
+        val defaults = VRSettings()
+        return VRSettings(
+            displayMode = prefs.getString(KEY_MODE, null)
+                ?.let { runCatching { DisplayMode.valueOf(it) }.getOrNull() }
+                ?: defaults.displayMode,
+            screenDiagonalInches = prefs.getFloat(KEY_DIAGONAL, defaults.screenDiagonalInches),
+            screenDistanceMeters = prefs.getFloat(KEY_DISTANCE, defaults.screenDistanceMeters),
+            lensSeparationMm = if (prefs.contains(KEY_LENS)) prefs.getFloat(KEY_LENS, 0f) else null,
+            renderScale = prefs.getFloat(KEY_RENDER_SCALE, defaults.renderScale),
+            preferHighRefreshRate = prefs.getBoolean(KEY_HIGH_REFRESH, defaults.preferHighRefreshRate),
+            showEnvironment = prefs.getBoolean(KEY_ENVIRONMENT, defaults.showEnvironment),
+        ).sanitized()
+    }
+
+    private fun save(s: VRSettings) {
+        prefs.edit {
+            putString(KEY_MODE, s.displayMode.name)
+            putFloat(KEY_DIAGONAL, s.screenDiagonalInches)
+            putFloat(KEY_DISTANCE, s.screenDistanceMeters)
+            if (s.lensSeparationMm != null) putFloat(KEY_LENS, s.lensSeparationMm) else remove(KEY_LENS)
+            putFloat(KEY_RENDER_SCALE, s.renderScale)
+            putBoolean(KEY_HIGH_REFRESH, s.preferHighRefreshRate)
+            putBoolean(KEY_ENVIRONMENT, s.showEnvironment)
+        }
+    }
+
+    private companion object {
+        const val PREFS_NAME = "novavr_settings"
+        const val KEY_MODE = "display_mode"
+        const val KEY_DIAGONAL = "screen_diagonal_in"
+        const val KEY_DISTANCE = "screen_distance_m"
+        const val KEY_LENS = "lens_separation_mm"
+        const val KEY_RENDER_SCALE = "render_scale"
+        const val KEY_HIGH_REFRESH = "prefer_high_refresh"
+        const val KEY_ENVIRONMENT = "show_environment"
+    }
+}

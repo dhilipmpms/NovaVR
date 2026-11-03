@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Framework theme only (no AppCompat dependency); Compose draws the UI. -->
+    <style name="Theme.NovaVR" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nova_background</item>
+        <item name="android:colorBackground">@color/nova_background</item>
+        <item name="android:colorAccent">@color/nova_accent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!-- VR: black, full-screen, drawing under the camera cutout so the
+         rendered image covers the whole physical panel (required for correct
+         lens distortion). -->
+    <style name="Theme.NovaVR.Immersive">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>

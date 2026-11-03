@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 30+: cover the cutout on every edge in every orientation. -->
+    <style name="Theme.NovaVR.Immersive" parent="Theme.NovaVR">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>
