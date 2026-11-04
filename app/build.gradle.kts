@@ -1,8 +1,13 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val keystoreProperties = Properties().apply {
+    load(rootProject.file("keystore.properties").inputStream())
 }
 
 android {
@@ -16,15 +21,34 @@ android {
         versionCode = 3
         versionName = "0.3.0"
 
+        // One APK containing all supported architectures.
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += listOf(
+                "arm64-v8a",
+                "armeabi-v7a",
+                "x86_64"
+            )
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file(
+		keystoreProperties.getProperty("storeFile")
+	    )
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
         }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
+
             isMinifyEnabled = true
             isShrinkResources = true
+
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -54,7 +78,7 @@ android {
     }
 
     testOptions {
-        // Lets plain JVM tests touch android.* constants (e.g. Sensor.TYPE_*).
+        // Lets plain JVM tests touch android.* constants.
         unitTests.isReturnDefaultValues = true
     }
 }
@@ -68,8 +92,7 @@ kotlin {
 dependencies {
     implementation(project(":cardboard"))
 
-    // Optional Shizuku integration (Apache-2.0). Only used when the user
-    // installs and authorises Shizuku; NovaVR works without it.
+    // Optional Shizuku integration.
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
@@ -86,3 +109,4 @@ dependencies {
 
     testImplementation(libs.junit)
 }
+
